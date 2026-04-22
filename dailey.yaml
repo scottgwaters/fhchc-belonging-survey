@@ -1,0 +1,27 @@
+# Dailey OS deployment configuration
+# FHCHC Belonging Index Survey
+
+services:
+  web:
+    type: app_service
+    dockerfile: Dockerfile
+    port: 3000
+    healthcheck:
+      path: /api/health
+      interval: 30s
+      timeout: 10s
+
+databases:
+  - type: postgres
+    name: survey-db
+    version: "16"
+
+env:
+  # Database URL is auto-injected by Dailey OS
+  # Add these in Dailey OS dashboard:
+  # - NEXTAUTH_SECRET
+  # - NEXTAUTH_URL
+  # - GOOGLE_CLIENT_ID
+  # - GOOGLE_CLIENT_SECRET
+  # - SENDGRID_API_KEY
+  NODE_ENV: production

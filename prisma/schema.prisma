@@ -1,0 +1,415 @@
+// FHCHC Belonging Index Survey - Database Schema
+// Based on PRD Section 19: Core Data Model
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "linux-musl-arm64-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// CLIENTS & CAMPAIGNS
+// =============================================================================
+
+model Client {
+  id              String     @id @default(uuid())
+  name            String
+  slug            String     @unique
+  logoUrl         String?    @map("logo_url")
+  themeConfigJson Json?      @map("theme_config_json")
+  status          String     @default("active") // active, inactive
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  campaigns       Campaign[]
+
+  @@map("clients")
+}
+
+model Campaign {
+  id                  String    @id @default(uuid())
+  clientId            String    @map("client_id")
+  year                Int
+  name                String
+  startAt             DateTime? @map("start_at")
+  visibleCloseAt      DateTime? @map("visible_close_at")
+  tokenExpiresAt      DateTime? @map("token_expires_at")
+  timezone            String    @default("America/New_York")
+  status              String    @default("draft") // draft, scheduled, live, closed, archived
+  introCopy           String?   @map("intro_copy")
+  invitationCopy      String?   @map("invitation_copy")
+  reminderCopyJson    Json?     @map("reminder_copy_json")
+  anonymityThreshold  Int       @default(5) @map("anonymity_threshold")
+  emtCodeHash         String?   @map("emt_code_hash")
+  theme               String    @default("teal") // slate, teal, terracotta, plum, navy
+  logoUrl             String?   @map("logo_url") // data URL or http(s) URL, shown on respondent chrome
+  logoAlt             String?   @map("logo_alt")
+  welcomeCopyJson     Json?     @map("welcome_copy_json") // overrides default trust cards + principles copy
+  isTemplate          Boolean   @default(false) @map("is_template")
+  templateSourceId    String?   @map("template_source_id")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  client              Client    @relation(fields: [clientId], references: [id])
+  templateSource      Campaign? @relation("CampaignTemplate", fields: [templateSourceId], references: [id])
+  derivedCampaigns    Campaign[] @relation("CampaignTemplate")
+
+  questionSchemas     QuestionSchema[]
+  recipients          DistributionRecipient[]
+  responses           Response[]
+  responseDrafts      ResponseDraft[]
+  orgRollups          OrgRollup[]
+  exports             Export[]
+  statusLogs          CampaignStatusLog[]
+
+  @@map("campaigns")
+}
+
+model CampaignStatusLog {
+  id              String   @id @default(uuid())
+  campaignId      String   @map("campaign_id")
+  previousStatus  String   @map("previous_status")
+  newStatus       String   @map("new_status")
+  changedByUserId String   @map("changed_by_user_id")
+  reason          String?
+  changedAt       DateTime @default(now()) @map("changed_at")
+
+  campaign        Campaign  @relation(fields: [campaignId], references: [id])
+  changedByUser   AdminUser @relation(fields: [changedByUserId], references: [id])
+
+  @@map("campaign_status_log")
+}
+
+// =============================================================================
+// QUESTION SCHEMA & QUESTIONS
+// =============================================================================
+
+model QuestionSchema {
+  id          String   @id @default(uuid())
+  campaignId  String   @map("campaign_id")
+  versionName String   @map("version_name")
+  schemaJson  Json     @map("schema_json")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  campaign    Campaign   @relation(fields: [campaignId], references: [id])
+  questions   Question[]
+
+  @@map("question_schemas")
+}
+
+model Question {
+  id                  String    @id @default(uuid())
+  schemaId            String    @map("schema_id")
+  metricCode          String?   @map("metric_code") // Stable ID for YoY comparison
+  sectionKey          String    @map("section_key")
+  displayOrder        Int       @map("display_order")
+  prompt              String
+  helpText            String?   @map("help_text")
+  responseType        String    @map("response_type") // slider, single_select, multi_select, open_text
+  required            Boolean   @default(true)
+  optionsJson         Json?     @map("options_json")
+  parentQuestionId    String?   @map("parent_question_id")
+  showIfParentValue   String?   @map("show_if_parent_value")
+  reverseScore        Boolean   @default(false) @map("reverse_score")
+  reportingConfigJson Json?     @map("reporting_config_json") // includes favorable_threshold
+  activeStatus        String    @default("active") @map("active_status") // draft, active, hidden, retired
+  comparableToPrior   Boolean   @default(true) @map("comparable_to_prior")
+  deactivatedAt       DateTime? @map("deactivated_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  schema              QuestionSchema @relation(fields: [schemaId], references: [id])
+  parentQuestion      Question?      @relation("QuestionConditional", fields: [parentQuestionId], references: [id])
+  childQuestions      Question[]     @relation("QuestionConditional")
+  responseItems       ResponseItem[]
+  editHistory         QuestionEditHistory[]
+
+  @@map("questions")
+}
+
+model QuestionEditHistory {
+  id              String   @id @default(uuid())
+  questionId      String   @map("question_id")
+  fieldChanged    String   @map("field_changed")
+  oldValue        String?  @map("old_value")
+  newValue        String?  @map("new_value")
+  changedByUserId String   @map("changed_by_user_id")
+  changedAt       DateTime @default(now()) @map("changed_at")
+
+  question        Question  @relation(fields: [questionId], references: [id])
+  changedByUser   AdminUser @relation(fields: [changedByUserId], references: [id])
+
+  @@map("question_edit_history")
+}
+
+// =============================================================================
+// DISTRIBUTION (Identity Tracking - Trusted Separation)
+// =============================================================================
+
+model DistributionRecipient {
+  id                  String    @id @default(uuid())
+  campaignId          String    @map("campaign_id")
+  employeeIdentifier  String?   @map("employee_identifier") // Internal ID (NOT stored with response)
+  email               String
+  firstName           String?   @map("first_name")
+  locationCode        String?   @map("location_code")
+  roleCode            String?   @map("role_code")
+  expectedRollupGroup String?   @map("expected_rollup_group")
+  isEmtExpected       Boolean   @default(false) @map("is_emt_expected")
+  inviteTokenHash     String    @unique @map("invite_token_hash")
+  inviteSentAt        DateTime? @map("invite_sent_at")
+  reminderCount       Int       @default(0) @map("reminder_count")
+  startedAt           DateTime? @map("started_at")
+  lastActivityAt      DateTime? @map("last_activity_at")
+  completedAt         DateTime? @map("completed_at") // Marked when submitted (trusted separation)
+  bounceStatus        String?   @map("bounce_status") // null, soft_bounce, hard_bounce
+  bounceReason        String?   @map("bounce_reason")
+  emailUpdatedAt      DateTime? @map("email_updated_at")
+  originalEmail       String?   @map("original_email")
+  deletedAt           DateTime? @map("deleted_at") // PRD §17.2 - identity soft-delete
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  campaign            Campaign  @relation(fields: [campaignId], references: [id])
+  reminderSends       ReminderSend[]
+
+  @@index([campaignId])
+  @@index([email])
+  @@map("distribution_recipients")
+}
+
+// PRD §8.10 - Reminder send idempotency record
+model ReminderSend {
+  id              String   @id @default(uuid())
+  campaignId      String   @map("campaign_id")
+  recipientId     String   @map("recipient_id")
+  reminderOffset  String   @map("reminder_offset") // after_open_7, before_close_2, manual_*
+  sentAt          DateTime @default(now()) @map("sent_at")
+
+  recipient       DistributionRecipient @relation(fields: [recipientId], references: [id])
+
+  @@unique([campaignId, recipientId, reminderOffset])
+  @@index([campaignId])
+  @@map("reminder_sends")
+}
+
+// =============================================================================
+// RESPONSES (Anonymous - Trusted Separation)
+// NO reference to DistributionRecipient - this is intentional!
+// =============================================================================
+
+model Response {
+  id                     String    @id @default(uuid())
+  campaignId             String    @map("campaign_id")
+  anonymousSessionId     String    @unique @map("anonymous_session_id") // Generated at survey start
+  submittedAt            DateTime? @map("submitted_at")
+  isComplete             Boolean   @default(false) @map("is_complete")
+  isEmtFlagged           Boolean   @default(false) @map("is_emt_flagged")
+  emtValidationSource    String?   @map("emt_validation_source") // code, token, manual
+  anomalyFlagJson        Json?     @map("anomaly_flag_json")
+  respondentLocationCode String?   @map("respondent_location_code") // Denormalized for reporting
+  respondentRoleCode     String?   @map("respondent_role_code") // Denormalized for reporting
+  respondentRollupGroup  String?   @map("respondent_rollup_group") // Denormalized for reporting
+  isTestData             Boolean   @default(false) @map("is_test_data")
+  isPreview              Boolean   @default(false) @map("is_preview")
+  createdAt              DateTime  @default(now()) @map("created_at")
+
+  campaign               Campaign       @relation(fields: [campaignId], references: [id])
+  items                  ResponseItem[]
+
+  @@index([campaignId])
+  @@map("responses")
+}
+
+model ResponseItem {
+  id          String   @id @default(uuid())
+  responseId  String   @map("response_id")
+  questionId  String   @map("question_id")
+  valueText   String?  @map("value_text") // For open text
+  valueNumber Decimal? @map("value_number") @db.Decimal(10, 2) // For sliders
+  valueJson   Json?    @map("value_json") // For multi-select, other combos
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  response    Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  question    Question @relation(fields: [questionId], references: [id])
+
+  @@unique([responseId, questionId])
+  @@map("response_items")
+}
+
+// =============================================================================
+// RESPONSE DRAFTS (Auto-Save)
+// Deleted after successful submission
+// =============================================================================
+
+model ResponseDraft {
+  id                  String   @id @default(uuid())
+  campaignId          String   @map("campaign_id")
+  inviteTokenHash     String   @unique @map("invite_token_hash") // For lookup only (not FK)
+  anonymousSessionId  String   @map("anonymous_session_id") // Same ID used in final Response
+  responseItemsJson   Json     @map("response_items_json")
+  sectionProgress     String?  @map("section_progress") // Last completed section key
+  // PRD §8.8 / §15.3.1 - EMT validation state captured during the survey
+  isEmtFlagged        Boolean  @default(false) @map("is_emt_flagged")
+  emtValidationSource String?  @map("emt_validation_source") // code, token, manual
+  emtAttemptCount     Int      @default(0) @map("emt_attempt_count") // PRD §15.4 - 5-attempt session lockout
+  emtLockedAt         DateTime? @map("emt_locked_at")
+  lastSavedAt         DateTime @updatedAt @map("last_saved_at")
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  campaign            Campaign @relation(fields: [campaignId], references: [id])
+
+  @@index([campaignId])
+  @@map("response_drafts")
+}
+
+// PRD §15.4 - sliding-window rate limit counters in Postgres
+model RateLimitAttempt {
+  id        String   @id @default(uuid())
+  bucket    String   // e.g., "validate-emt:ip:1.2.3.4" or "validate-emt:session:<sid>"
+  attemptedAt DateTime @default(now()) @map("attempted_at")
+
+  @@index([bucket, attemptedAt])
+  @@map("rate_limit_attempts")
+}
+
+// =============================================================================
+// ORGANIZATION ROLL-UPS
+// =============================================================================
+
+model OrgRollup {
+  id                      String  @id @default(uuid())
+  campaignId              String  @map("campaign_id")
+  rawGroupCode            String  @map("raw_group_code")
+  rawGroupLabel           String  @map("raw_group_label")
+  parentGroupCode         String  @map("parent_group_code")
+  parentGroupLabel        String  @map("parent_group_label")
+  suppressIfBelowThreshold Boolean @default(true) @map("suppress_if_below_threshold")
+
+  campaign                Campaign @relation(fields: [campaignId], references: [id])
+
+  @@unique([campaignId, rawGroupCode])
+  @@map("org_rollups")
+}
+
+// =============================================================================
+// ADMIN USERS & AUTH
+// =============================================================================
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String?
+  image        String?
+  role         String    @default("viewer") // super_admin, campaign_admin, viewer
+  passwordHash String?   @map("password_hash") // bcrypt; null means OAuth-only
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // NextAuth relations
+  accounts             Account[]
+  authSessions         Session[]
+
+  // App relations
+  adminSessions        AdminSession[]
+  auditLogs            AuditLog[]
+  statusLogs           CampaignStatusLog[]
+  questionEditHistory  QuestionEditHistory[]
+  exports              Export[]
+
+  @@map("admin_users")
+}
+
+model AdminSession {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  resourceType  String?  @map("resource_type") // campaign, schema, etc.
+  resourceId    String?  @map("resource_id")
+  lastHeartbeat DateTime @default(now()) @map("last_heartbeat")
+  startedAt     DateTime @default(now()) @map("started_at")
+
+  user          AdminUser @relation(fields: [userId], references: [id])
+
+  @@map("admin_sessions")
+}
+
+// =============================================================================
+// EXPORTS & AUDIT
+// =============================================================================
+
+model Export {
+  id          String   @id @default(uuid())
+  campaignId  String   @map("campaign_id")
+  exportType  String   @map("export_type") // csv, json, aggregated
+  generatedBy String   @map("generated_by")
+  generatedAt DateTime @default(now()) @map("generated_at")
+  storageUrl  String?  @map("storage_url")
+
+  campaign    Campaign  @relation(fields: [campaignId], references: [id])
+  user        AdminUser @relation(fields: [generatedBy], references: [id])
+
+  @@map("exports")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid())
+  actorUserId  String?  @map("actor_user_id")
+  actionType   String   @map("action_type")
+  entityType   String   @map("entity_type")
+  entityId     String?  @map("entity_id")
+  metadataJson Json?    @map("metadata_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  actor        AdminUser? @relation(fields: [actorUserId], references: [id])
+
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+// =============================================================================
+// NEXT-AUTH TABLES (required for NextAuth.js with Prisma adapter)
+// =============================================================================
+
+model Account {
+  id                String  @id @default(uuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade, map: "Account_user_fkey")
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  sessionToken String    @unique @map("session_token")
+  userId       String    @map("user_id")
+  expires      DateTime
+
+  user         AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade, map: "Session_user_fkey")
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
