@@ -20,7 +20,9 @@ export type AuditAction =
   | "admin.login"
   | "admin.role_change"
   | "response.flag"
-  | "response.unflag";
+  | "response.unflag"
+  | "platform.export"
+  | "platform.import";
 
 export type AuditEntityType =
   | "campaign"
@@ -29,7 +31,8 @@ export type AuditEntityType =
   | "distribution_recipient"
   | "response"
   | "export"
-  | "admin_user";
+  | "admin_user"
+  | "platform";
 
 interface AuditLogParams {
   actorUserId: string | null;

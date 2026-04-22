@@ -4,6 +4,7 @@ import { getSession, hasRole } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { AdminHeader } from "@/components/admin/AdminHeader";
 import { AdminUsersCard } from "@/components/admin/AdminUsersCard";
+import { PlatformTransferCard } from "@/components/admin/PlatformTransferCard";
 
 export default async function SettingsPage() {
   const session = await getSession();
@@ -70,6 +71,8 @@ export default async function SettingsPage() {
             />
           </section>
         )}
+
+        {isSuperAdmin && <PlatformTransferCard />}
 
       </main>
     </div>
